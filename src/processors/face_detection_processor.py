@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .emotion_recognizer import DeepFaceEmotionRecognizer
 from .face_recognizer import FaceRecognizer
+from ucode_sdk import new, Config
 
 from src.config import AppConfig
 from src.di.dependencies import DependencyContainer
@@ -79,6 +80,7 @@ class FaceDetectionProcessor:
         self._lock = threading.Lock()
         self.min_face_size: Optional[int] = 80
 
+        self.ucode_api = new(config=Config(app_id=config.ucode.app_id, base_url=config.ucode.base_url))
         
         self.unknown_person_manager = UnknownPersonManager(config)
         
@@ -1078,8 +1080,8 @@ class FaceDetectionProcessor:
         return False
     
     def _save_unknown_person_to_database(self, face_id: str) -> bool:
-        """Save unknown person images to storage"""
-        import os, json
+        """Save unknown person: best image -> UCode -> create human -> save face embedding"""
+        import os, json, requests
         
         try:
             if face_id in self.unknown_person_manager.saved_faces:
@@ -1091,75 +1093,165 @@ class FaceDetectionProcessor:
                 logger.warning(f"No images available for unknown face {face_id}")
                 return False
             
-            # Create storage directory for unknown faces
-            unknown_faces_dir = "storage/unknown_faces"
-            os.makedirs(unknown_faces_dir, exist_ok=True)
+            # Get the SINGLE best quality image (first one is highest quality)
+            best_image_data = best_images[0]
+            face_image = best_image_data['image']
+            quality = best_image_data['quality']
+            timestamp = best_image_data['timestamp']
             
-            # Create subdirectory for this specific unknown person
-            person_dir = os.path.join(unknown_faces_dir, f"unknown_{face_id}_{int(time.time())}")
-            os.makedirs(person_dir, exist_ok=True)
+            # Create temporary storage for the best image only
+            temp_dir = "storage/temp_unknown"
+            os.makedirs(temp_dir, exist_ok=True)
             
-            saved_count = 0
-            for i, img_data in enumerate(best_images):
-                try:
-                    face_image = img_data['image']
-                    quality = img_data['quality']
-                    timestamp = img_data['timestamp']
-                    
-                    # Create filename with quality info
-                    filename = f"face_{i+1}_quality_{quality['quality_score']:.2f}_blur_{quality['blur_score']:.0f}.jpg"
-                    filepath = os.path.join(person_dir, filename)
-                    
-                    cv2.imwrite(filepath, face_image)
-                    saved_count += 1
-                    
-                    logger.info(f"Saved image {i+1}: {filename}")
-                    
-                    metadata = {
-                        'face_id': face_id,
-                        'timestamp': timestamp,
-                        'quality_score': quality['quality_score'],
-                        'blur_score': quality['blur_score'],
-                        'face_area': quality['face_area'],
-                        'pose_info': quality['pose_info'],
-                        'reasons': quality['reasons']
-                    }
-                    
-                    metadata_file = os.path.join(person_dir, f"metadata_{i+1}.json")
-                    with open(metadata_file, 'w') as f:
-                        json.dump(metadata, f, indent=2)
-                        
-                except Exception as e:
-                    logger.error(f"Error saving image {i+1} for {face_id}: {e}")
+            # Save best image temporarily
+            current_timestamp = int(time.time())
+            filename = f"unknown_{face_id}_{current_timestamp}_quality_{quality['quality_score']:.2f}.jpg"
+            temp_filepath = os.path.join(temp_dir, filename)
             
-            if saved_count > 0:
-                # Mark as saved to prevent duplicate saves
-                self.unknown_person_manager.saved_faces.add(face_id)
-                logger.info(f"Successfully saved {saved_count} images for unknown person {face_id} to {person_dir}")
+            cv2.imwrite(temp_filepath, face_image)
+            logger.info(f"Saved best quality image: {filename}")
+            
+            # STEP 1: Upload to UCode
+            image_url = "https://cdn.u-code.io/"
+            try:
+                uploadRes = self.ucode_api.files().upload(temp_filepath).exec()
                 
-                # Optionally create a summary file
-                summary = {
-                    'face_id': face_id,
-                    'detection_time': time.time(),
-                    'total_images': saved_count,
-                    'storage_path': person_dir,
-                    'average_quality': sum(img['quality']['quality_score'] for img in best_images) / len(best_images),
-                    'best_quality': max(img['quality']['quality_score'] for img in best_images)
+                if uploadRes and len(uploadRes) >= 1:
+                    create_response = uploadRes[0]  
+                    
+                if hasattr(create_response, 'data') and create_response.data:
+                        file_link = create_response.data.get('link')
+                        if file_link:
+                            # construct full URL for download
+                            image_url += file_link
+                else:
+                    return False
+                    
+                logger.info(f"Successfully uploaded to UCode: {image_url}")
+                
+            except Exception as e:
+                logger.error(f"Exception during UCode upload for {face_id}: {e}")
+                return False
+            finally:
+                # Clean up temp file
+                try:
+                    os.remove(temp_filepath)
+                except:
+                    pass
+            
+            # STEP 2: Create human in UCode
+            human_guid = ""
+            try:
+                human_api_data = {
+                    "full_name": f"Unknown_Client_{current_timestamp}",
+                    # "company_id": "",  # Add if needed
+                    # "branch_id": "",   # Add if needed
+                    "photos": [image_url],
+                    "type": ["client"]
                 }
                 
-                summary_file = os.path.join(person_dir, "summary.json")
-                with open(summary_file, 'w') as f:
-                    json.dump(summary, f, indent=2)
+                resp = self.ucode_api.items("human").create(human_api_data).exec()
+                if resp and len(resp) >= 1:
+                    human_create_response = resp[0]
+                
+                human_guid = human_create_response.data_container.data["guid"]
+                    
+                logger.info(f"Successfully created human in UCode: {human_guid}")
+                
+            except Exception as e:
+                logger.error(f"Exception during UCode human creation for {face_id}: {e}")
+                return False
+            
+            # STEP 3: Save face embedding via external API
+            try:
+
+                face_api_data = {
+                    "human_guid": human_guid,
+                    "name": f"Unknown_Client_{current_timestamp}",
+                    "human_type": "client",
+                    "image_url": image_url,
+                    "metadata": self._make_json_serializable({
+                        "face_id": face_id,
+                        "detection_timestamp": current_timestamp,
+                        "original_timestamp": timestamp,
+                        "quality_score": quality['quality_score'],
+                        "blur_score": quality['blur_score'],
+                        "face_area": quality['face_area'],
+                        "pose_info": quality['pose_info'],
+                        "is_frontal": quality['pose_info']['is_frontal'],
+                        "reasons": quality['reasons']
+                    })
+                }
+                # Get the external API URL from config
+                external_api_url = getattr(self.config, 'EXTERNAL_FACE_API_URL', 'https://tabassum.mini-tweet.uz/api/v1/faces/from-url')
+                
+                response = requests.post(external_api_url, json=face_api_data, timeout=30)
+                
+                if response.status_code == 200 or response.status_code == 201:
+                    logger.info(f"Successfully saved face embedding for {face_id} via external API")
+                    response_data = response.json()
+                    logger.info(f"External API response: {response_data}")
+                else:
+                    logger.error(f"External API failed for {face_id}: {response.status_code} - {response.text}")
+                    return False
+                    
+            except Exception as e:
+                logger.error(f"Exception during external API call for {face_id}: {e}")
+                return False
+            
+            # STEP 4: Save metadata locally for tracking
+            try:
+                # Create storage directory for successful saves
+                success_dir = "storage/unknown_faces_saved"
+                os.makedirs(success_dir, exist_ok=True)
+                
+                success_metadata = {
+                    'face_id': face_id,
+                    'human_guid': human_guid,
+                    'image_url': image_url,
+                    'detection_time': current_timestamp,
+                    'original_timestamp': timestamp,
+                    'quality_score': quality['quality_score'],
+                    'blur_score': quality['blur_score'],
+                    'pose_info': quality['pose_info'],
+                    'external_api_url': external_api_url,
+                    'success': True
+                }
+                
+                success_file = os.path.join(success_dir, f"success_{face_id}_{current_timestamp}.json")
+                with open(success_file, 'w') as f:
+                    json.dump(success_metadata, f, indent=2)
+                    
+            except Exception as e:
+                logger.warning(f"Failed to save success metadata for {face_id}: {e}")
+                # Don't fail the whole process for this
+            
+            # Mark as saved to prevent duplicate saves
+            self.unknown_person_manager.saved_faces.add(face_id)
+            logger.info(f"Successfully completed full pipeline for unknown person {face_id}")
             
             # Clean up after processing
             self.unknown_person_manager.cleanup_face(face_id)
-            return saved_count > 0
+            return True
             
         except Exception as e:
-            logger.error(f"Error saving unknown person {face_id} to storage: {e}")
+            logger.error(f"Error in save pipeline for unknown person {face_id}: {e}")
             return False
-        
-        
+    
+    def _make_json_serializable(self, obj):
+            """Convert object to JSON-serializable format"""
+            if isinstance(obj, dict):
+                return {key: self._make_json_serializable(value) for key, value in obj.items()}
+            elif isinstance(obj, list):
+                return [self._make_json_serializable(item) for item in obj]
+            elif isinstance(obj, (np.bool_, bool)):
+                return bool(obj)
+            elif isinstance(obj, (np.int32, np.int64, int)):
+                return int(obj)
+            elif isinstance(obj, (np.float32, np.float64, float)):
+                return float(obj)
+            else:
+                return str(obj)
 class UnknownPersonManager:
     """Manages unknown face detection and quality assessment"""
     

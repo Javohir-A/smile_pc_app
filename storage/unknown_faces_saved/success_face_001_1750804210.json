@@ -1,0 +1,13 @@
+{
+  "face_id": "face_001",
+  "human_guid": "d6db16e3-e232-4dea-b6ea-28c8fc22f5bd",
+  "image_url": "https://cdn.u-code.io/efba2b71-f75f-482f-9b4e-6538961864b7/Media/b8e985c0-7724-44d8-a77b-cf01b3417c4d_unknown_face_001_1750804210_quality_0.86.jpg",
+  "detection_time": 1750804210,
+  "original_timestamp": 1750804208.685386,
+  "quality_score": 0.8600000000000001,
+  "blur_score": 69.28856148062782,
+  "pose_info": {
+    "yaw": 17.89810080350621,
+    "pitch": 0.0,
+    "roll": -10.097504384075286,
+    "is_frontal": 
