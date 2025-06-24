@@ -78,6 +78,9 @@ class FaceDetectionProcessor:
         self.next_face_id = 1
         self._lock = threading.Lock()
         self.min_face_size: Optional[int] = 80
+
+        
+        self.unknown_person_manager = UnknownPersonManager(config)
         
         # Store detection results for each stream
         self.stream_detections: Dict[str, DetectionResult] = {}
@@ -343,6 +346,8 @@ class FaceDetectionProcessor:
         return should_process_recognition, should_process_emotion, should_process_pose
 
         
+# Modify _process_single_detection to include unknown person processing:
+
     def _process_single_detection(self, frame: np.ndarray, detection: np.ndarray, 
                                 w: int, h: int, should_process_recognition: bool,
                                 should_process_emotion: bool, should_process_pose: bool) -> Optional[FaceDetection]:
@@ -368,8 +373,19 @@ class FaceDetectionProcessor:
             self._update_face_cache_async(face_id, face_roi_expanded, face_roi, 
                                         should_process_pose)
         
-        # Create and return face detection object
-        return self._create_face_detection_object(x1, y1, width, height, confidence, face_id, cached_data)
+        # Create face detection object
+        face_detection = self._create_face_detection_object(x1, y1, width, height, confidence, face_id, cached_data)
+        
+        # Process unknown faces (run this in background to avoid slowing down main thread)
+        if not face_detection.is_recognized and should_process_pose:
+            try:
+                self.background_executor.submit(
+                    self._process_unknown_face, face_roi, face_detection
+                )
+            except Exception:
+                pass  # Don't let unknown face processing errors affect main pipeline
+        
+        return face_detection
 
     def process_frame(self, frame_data: FrameData) -> Optional[DetectionResult]:
         """Process a single frame - ULTRA-OPTIMIZED with pose detection"""
@@ -379,6 +395,12 @@ class FaceDetectionProcessor:
         start_time = time.time()
         self.frame_counter += 1
         self.log_counter += 1
+        
+        if self.frame_counter % 18000 == 0:  # ~5 minutes at 60fps
+            try:
+                self.background_executor.submit(self.unknown_person_manager.cleanup_old_first_seen)
+            except Exception:
+                pass
         
         try:
             frame = frame_data.frame
@@ -1024,3 +1046,246 @@ class FaceDetectionProcessor:
             recognition_confidence=cached_data.recognition_confidence,
             face_embedding=None,  # Skip for performance
         )
+        
+ # Add this method to FaceDetectionProcessor:
+
+    def _process_unknown_face(self, face_roi: np.ndarray, face_detection: FaceDetection) -> bool:
+        """Process unknown face with quality control"""
+        if face_detection.is_recognized:
+            return False  # Not an unknown face
+        
+        # Assess quality including pose
+        quality_assessment = self._assess_face_quality(face_roi, face_detection)
+        
+        # Check if we should capture this face
+        if not self.unknown_person_manager.should_capture_unknown_face(
+            face_detection.face_id, quality_assessment
+        ):
+            return False
+        
+        # If quality is good, save the face image
+        if quality_assessment['is_good_quality']:
+            self.unknown_person_manager.add_face_image(
+                face_detection.face_id, face_roi, quality_assessment
+            )
+            logger.info(f"Captured high-quality unknown face {face_detection.face_id} "
+                    f"(quality: {quality_assessment['quality_score']:.2f})")
+        
+        # Check if we're ready to save to database
+        if self.unknown_person_manager.is_ready_for_database(face_detection.face_id):
+            return self._save_unknown_person_to_database(face_detection.face_id)
+        
+        return False
+    
+    def _save_unknown_person_to_database(self, face_id: str) -> bool:
+        """Save unknown person images to storage"""
+        import os, json
+        
+        try:
+            if face_id in self.unknown_person_manager.saved_faces:
+                return True
+            
+            # Get best images
+            best_images = self.unknown_person_manager.get_best_images(face_id, count=3)
+            if not best_images:
+                logger.warning(f"No images available for unknown face {face_id}")
+                return False
+            
+            # Create storage directory for unknown faces
+            unknown_faces_dir = "storage/unknown_faces"
+            os.makedirs(unknown_faces_dir, exist_ok=True)
+            
+            # Create subdirectory for this specific unknown person
+            person_dir = os.path.join(unknown_faces_dir, f"unknown_{face_id}_{int(time.time())}")
+            os.makedirs(person_dir, exist_ok=True)
+            
+            saved_count = 0
+            for i, img_data in enumerate(best_images):
+                try:
+                    face_image = img_data['image']
+                    quality = img_data['quality']
+                    timestamp = img_data['timestamp']
+                    
+                    # Create filename with quality info
+                    filename = f"face_{i+1}_quality_{quality['quality_score']:.2f}_blur_{quality['blur_score']:.0f}.jpg"
+                    filepath = os.path.join(person_dir, filename)
+                    
+                    cv2.imwrite(filepath, face_image)
+                    saved_count += 1
+                    
+                    logger.info(f"Saved image {i+1}: {filename}")
+                    
+                    metadata = {
+                        'face_id': face_id,
+                        'timestamp': timestamp,
+                        'quality_score': quality['quality_score'],
+                        'blur_score': quality['blur_score'],
+                        'face_area': quality['face_area'],
+                        'pose_info': quality['pose_info'],
+                        'reasons': quality['reasons']
+                    }
+                    
+                    metadata_file = os.path.join(person_dir, f"metadata_{i+1}.json")
+                    with open(metadata_file, 'w') as f:
+                        json.dump(metadata, f, indent=2)
+                        
+                except Exception as e:
+                    logger.error(f"Error saving image {i+1} for {face_id}: {e}")
+            
+            if saved_count > 0:
+                # Mark as saved to prevent duplicate saves
+                self.unknown_person_manager.saved_faces.add(face_id)
+                logger.info(f"Successfully saved {saved_count} images for unknown person {face_id} to {person_dir}")
+                
+                # Optionally create a summary file
+                summary = {
+                    'face_id': face_id,
+                    'detection_time': time.time(),
+                    'total_images': saved_count,
+                    'storage_path': person_dir,
+                    'average_quality': sum(img['quality']['quality_score'] for img in best_images) / len(best_images),
+                    'best_quality': max(img['quality']['quality_score'] for img in best_images)
+                }
+                
+                summary_file = os.path.join(person_dir, "summary.json")
+                with open(summary_file, 'w') as f:
+                    json.dump(summary, f, indent=2)
+            
+            # Clean up after processing
+            self.unknown_person_manager.cleanup_face(face_id)
+            return saved_count > 0
+            
+        except Exception as e:
+            logger.error(f"Error saving unknown person {face_id} to storage: {e}")
+            return False
+        
+        
+class UnknownPersonManager:
+    """Manages unknown face detection and quality assessment"""
+    
+    def __init__(self, config:AppConfig):
+        self.unknown_faces_buffer = {}  # face_id -> list of quality assessments
+        self.capture_attempts = {}      # face_id -> attempt count
+        self.unknown_face_images = {}   # face_id -> list of face images
+        self.face_first_seen = {}  # face_id -> timestamp
+        self.recognition_grace_period = 3.0
+        
+        # Configuration
+        self.max_attempts = getattr(config.detection, 'UNKNOWN_FACE_MAX_ATTEMPTS', 5)
+        self.min_good_captures = getattr(config.detection, 'UNKNOWN_FACE_MIN_CAPTURES', 2)
+        self.min_quality_score = getattr(config.detection, 'UNKNOWN_FACE_MIN_QUALITY', 0.75)
+        self.require_frontal = getattr(config.detection, 'UNKNOWN_FACE_REQUIRE_FRONTAL', True)
+        self.saved_faces = set()  
+        
+        logger.info(f"UnknownPersonManager initialized: max_attempts={self.max_attempts}, "
+                   f"min_captures={self.min_good_captures}, min_quality={self.min_quality_score}")
+    
+    def should_capture_unknown_face(self, face_id: str, quality_assessment: dict) -> bool:
+        """Decide whether to capture this unknown face"""
+        current_time = time.time()
+        
+        # Track when this face was first seen
+        if face_id not in self.face_first_seen:
+            self.face_first_seen[face_id] = current_time
+        
+        # Give recognition system time to work (grace period)
+        time_since_first_seen = current_time - self.face_first_seen[face_id]
+        if time_since_first_seen < self.recognition_grace_period:
+            logger.info(f"Face {face_id} still in recognition grace period "
+                        f"({time_since_first_seen:.1f}s < {self.recognition_grace_period}s)")
+            return False
+        
+        #delete from first time seen to free memory after human is out of first time seen grace period
+        # if face_id in self.face_first_seen:
+        #     del self.face_first_seen[face_id]
+        
+        # Initialize tracking for new face
+        if face_id not in self.unknown_faces_buffer:
+            self.unknown_faces_buffer[face_id] = []
+            self.capture_attempts[face_id] = 0
+            self.unknown_face_images[face_id] = []
+        
+        # Check if we've exceeded max attempts
+        if self.capture_attempts[face_id] >= self.max_attempts:
+            return False
+        
+        # Count good quality captures so far
+        good_captures = len([q for q in self.unknown_faces_buffer[face_id] if q['is_good_quality']])
+        
+        # If we have enough good captures, stop
+        if good_captures >= self.min_good_captures:
+            return False
+        
+        # Check pose requirement
+        pose_info = quality_assessment.get('pose_info', {})
+        if self.require_frontal and not pose_info.get('is_frontal', False):
+            logger.debug(f"Skipping unknown face {face_id} - not frontal "
+                        f"(yaw: {pose_info.get('yaw', 0):.1f}°)")
+            return False
+        
+        # Increment attempt counter
+        self.capture_attempts[face_id] += 1
+        self.unknown_faces_buffer[face_id].append(quality_assessment)
+        
+        # Capture if quality is good
+        return quality_assessment['is_good_quality']
+    
+    def add_face_image(self, face_id: str, face_image: np.ndarray, quality_assessment: dict):
+        """Store a high-quality face image"""
+        if face_id in self.unknown_face_images:
+            self.unknown_face_images[face_id].append({
+                'image': face_image.copy(),
+                'quality': quality_assessment,
+                'timestamp': time.time()
+            })
+            logger.debug(f"Stored face image for {face_id} "
+                        f"(quality: {quality_assessment['quality_score']:.2f})")
+    
+    # def is_ready_for_database(self, face_id: str) -> bool:
+    #     """Check if we have enough good quality captures to save to database"""
+    #     if face_id not in self.unknown_faces_buffer:
+    #         return False
+        
+    #     good_captures = len([q for q in self.unknown_faces_buffer[face_id] if q['is_good_quality']])
+    #     return good_captures >= self.min_good_captures
+    
+    def is_ready_for_database(self, face_id: str) -> bool:
+        """Check if we have enough good quality captures to save to database"""
+        if face_id in self.saved_faces:
+            return False  # Already saved this face
+            
+        if face_id not in self.unknown_faces_buffer:
+            return False
+    
+        good_captures = len([q for q in self.unknown_faces_buffer[face_id] if q['is_good_quality']])
+        return good_captures >= self.min_good_captures
+    
+    def get_best_images(self, face_id: str, count: int = 3) -> List[dict]:
+        """Get the best quality images for a face"""
+        if face_id not in self.unknown_face_images:
+            return []
+        
+        # Sort by quality score
+        images = self.unknown_face_images[face_id]
+        sorted_images = sorted(images, key=lambda x: x['quality']['quality_score'], reverse=True)
+        return sorted_images[:count]
+    
+    def cleanup_face(self, face_id: str):
+        """Clean up data for a face that's been processed"""
+        self.unknown_faces_buffer.pop(face_id, None)
+        self.capture_attempts.pop(face_id, None)
+        self.unknown_face_images.pop(face_id, None)
+        logger.debug(f"Cleaned up unknown face data for {face_id}")
+        
+    def cleanup_old_first_seen(self):
+        """Clean up old first_seen entries to prevent memory leaks"""
+        current_time = time.time()
+        to_remove = []
+        
+        for face_id, first_seen_time in self.face_first_seen.items():
+            if current_time - first_seen_time > (self.recognition_grace_period + 30):  # Extra buffer
+                to_remove.append(face_id)
+        
+        for face_id in to_remove:
+            del self.face_first_seen[face_id]
+            logger.debug(f"Cleaned up old first_seen entry for {face_id}")
