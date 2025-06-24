@@ -1,0 +1,5 @@
+/smile_pc_venv
+/videos
+# Python cache files
+__pycache__/
+*.py[cod]

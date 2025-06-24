@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smile Mini PC - Camera Streams</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            min-height: 100vh;
+        }
+
+        .header {
+            background: rgba(0,0,0,0.3);
+            padding: 1rem 2rem;
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .status-indicator {
+            padding: 0.3rem 0.8rem;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            font-weight: bold;
+        }
+
+        .status-connected {
+            background: #00ff88;
+            color: #000;
+        }
+
+        .status-disconnected {
+            background: #ff4444;
+            color: white;
+        }
+
+        .status-connecting {
+            background: #ffaa00;
+            color: #000;
+        }
+
+        .container {
+            padding: 2rem;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .camera-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));  /* Increased from 400px */
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .camera-card {
+            background: rgba(255,255,255,0.1);
+            border-radius: 15px;
+            padding: 1.5rem;  /* Increased padding */
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.2);
+            transition: all 0.3s ease;
+        }
+
+        .camera-card:hover {
+            transform: translateY(-5px);
+            background: rgba(255,255,255,0.15);
+        }
+
+        .camera-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .camera-name {
+            font-size: 1.1rem;
+            font-weight: bold;
+        }
+
+        .camera-status {
+            padding: 0.2rem 0.6rem;
+            border-radius: 10px;
+            font-size: 0.8rem;
+            background: #333;
+        }
+
+        .camera-status.active {
+            background: #00ff88;
+            color: #000;
+        }
+
+        .camera-status.connecting {
+            background: #ffaa00;
+            color: #000;
+        }
+
+        .camera-video {
+            width: 100%;
+            height: 50vh;  /* Use 40% of viewport height */
+            min-height: 300px;  /* Minimum height */
+            max-height: 500px;  /* Maximum height */
+            background: #000;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .camera-video img {
+            max-width: 100%;
+            max-height: 100%;
+            width: auto;
+            height: auto;
+            object-fit: contain;  
+            border-radius: 10px;
+        }
+        .camera-info {
+            margin-top: 0.5rem;
+            font-size: 0.9rem;
+            opacity: 0.8;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.5rem;
+        }
+
+        .connect-btn {
+            background: linear-gradient(45deg, #00ff88, #00cc6a);
+            color: #000;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.3s ease;
+            margin-top: 0.5rem;
+            width: 100%;
+        }
+
+        .connect-btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 5px 15px rgba(0,255,136,0.3);
+        }
+
+        .connect-btn:disabled {
+            background: #666;
+            color: #999;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .connect-btn.disconnect {
+            background: linear-gradient(45deg, #ff6b6b, #ff5252);
+            color: white;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .no-cameras {
+            text-align: center;
+            padding: 3rem;
+            opacity: 0.7;
+        }
+
+        .debug-info {
+            background: rgba(0,0,0,0.3);
+            padding: 1rem;
+            border-radius: 10px;
+            margin-top: 1rem;
+            font-family: monospace;
+            font-size: 0.8rem;
+        }
+
+        .connection-quality {
+            width: 100%;
+            height: 4px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 2px;
+            overflow: hidden;
+            margin: 0.5rem 0;
+        }
+
+        .connection-quality-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #ff4444, #ffaa00, #00ff88);
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+
+        .all-streams-section {
+            background: rgba(255,255,255,0.1);
+            border-radius: 15px;
+            padding: 1.5rem;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.2);
+            margin-top: 2rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🎥 Smile Mini PC Camera Streams</h1>
+        <div>
+            <span id="connectionStatus" class="status-indicator status-disconnected">Disconnected</span>
+            <button id="reconnectBtn" class="connect-btn" onclick="reconnectAll()" style="margin-left: 1rem; width: auto;">Reconnect All</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <div id="cameraGrid" class="camera-grid">
+            <div class="no-cameras">
+                <div class="loading"></div>
+                <p>Connecting to camera system...</p>
+            </div>
+        </div>
+
+        <div class="all-streams-section">
+            <h2>📊 System Status</h2>
+            <div id="systemStatus" class="debug-info">
+                Initializing...
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class StableCameraStreams {
+            constructor() {
+                this.wsUrl = `ws://${window.location.hostname}:8765`;
+                this.cameras = new Map();
+                this.connections = new Map();
+                this.reconnectAttempts = new Map();
+                this.maxReconnects = 10;
+                this.reconnectDelay = 2000;
+                this.frameCount = new Map();
+                this.lastFrameTime = new Map();
+                this.connectionQuality = new Map();
+                
+                this.initializeSystem();
+            }
+
+            async initializeSystem() {
+                await this.loadCameras();
+                this.updateSystemStatus();
+                setInterval(() => this.updateSystemStatus(), 5000);
+            }
+
+            async loadCameras() {
+                try {
+                    const response = await fetch(`http://${window.location.hostname}:8765/api/cameras`);
+                    const cameras = await response.json();
+                    
+                    this.updateConnectionStatus(true);
+                    this.displayCameras(cameras);
+                    
+                } catch (error) {
+                    console.error('Failed to load cameras:', error);
+                    this.updateConnectionStatus(false);
+                    setTimeout(() => this.loadCameras(), 5000);
+                }
+            }
+
+            displayCameras(cameras) {
+                const grid = document.getElementById('cameraGrid');
+                
+                if (cameras.length === 0) {
+                    grid.innerHTML = `
+                        <div class="no-cameras">
+                            <p>No cameras available</p>
+                            <p>Check camera configuration</p>
+                        </div>
+                    `;
+                    return;
+                }
+
+                grid.innerHTML = '';
+                
+                cameras.forEach(camera => {
+                    this.cameras.set(camera.stream_id, camera);
+                    this.frameCount.set(camera.stream_id, 0);
+                    this.connectionQuality.set(camera.stream_id, 0);
+                    
+                    const cameraCard = this.createCameraCard(camera);
+                    grid.appendChild(cameraCard);
+                });
+            }
+
+            createCameraCard(camera) {
+                const card = document.createElement('div');
+                card.className = 'camera-card';
+                card.innerHTML = `
+                    <div class="camera-header">
+                        <div class="camera-name">${camera.name}</div>
+                        <div class="camera-status" id="status-${camera.stream_id}">${camera.status}</div>
+                    </div>
+                    <div class="camera-video" id="video-${camera.stream_id}">
+                        <p>Ready to connect</p>
+                    </div>
+                    <div class="connection-quality">
+                        <div class="connection-quality-bar" id="quality-${camera.stream_id}"></div>
+                    </div>
+                    <div class="camera-info">
+                        <div>FPS: <span id="fps-${camera.stream_id}">0</span></div>
+                        <div>Frames: <span id="frames-${camera.stream_id}">0</span></div>
+                        <div>Quality: <span id="quality-text-${camera.stream_id}">--</span></div>
+                        <div>Reconnects: <span id="reconnects-${camera.stream_id}">0</span></div>
+                    </div>
+                    <button class="connect-btn" id="btn-${camera.stream_id}" 
+                            onclick="streamManager.toggleStream('${camera.stream_id}')">
+                        Connect
+                    </button>
+                `;
+                return card;
+            }
+
+            async toggleStream(streamId) {
+                const button = document.getElementById(`btn-${streamId}`);
+                const status = document.getElementById(`status-${streamId}`);
+                
+                if (this.connections.has(streamId)) {
+                    // Disconnect
+                    this.disconnectStream(streamId);
+                } else {
+                    // Connect
+                    await this.connectStream(streamId);
+                }
+            }
+
+            async connectStream(streamId) {
+                const button = document.getElementById(`btn-${streamId}`);
+                const status = document.getElementById(`status-${streamId}`);
+                const videoContainer = document.getElementById(`video-${streamId}`);
+                
+                button.textContent = 'Connecting...';
+                button.disabled = true;
+                status.textContent = 'connecting';
+                status.className = 'camera-status connecting';
+                
+                try {
+                    const ws = new WebSocket(`${this.wsUrl}/ws/stream/${streamId}`);
+                    let frameTimeout;
+                    let isConnected = false;
+                    
+                    ws.onopen = () => {
+                        console.log(`Connected to stream ${streamId}`);
+                        isConnected = true;
+                        this.connections.set(streamId, ws);
+                        this.reconnectAttempts.set(streamId, 0);
+                        
+                        button.textContent = 'Disconnect';
+                        button.className = 'connect-btn disconnect';
+                        button.disabled = false;
+                        status.textContent = 'active';
+                        status.className = 'camera-status active';
+                        
+                        // Set frame timeout
+                        frameTimeout = setTimeout(() => {
+                            if (isConnected) {
+                                console.warn(`No frames received for ${streamId} in 10s`);
+                                this.reconnectStream(streamId);
+                            }
+                        }, 10000);
+                    };
+
+                    ws.onmessage = (event) => {
+                        try {
+                            const data = JSON.parse(event.data);
+                            
+                            if (data.type === 'frame' && data.stream_id === streamId) {
+                                // Clear frame timeout
+                                if (frameTimeout) {
+                                    clearTimeout(frameTimeout);
+                                    frameTimeout = setTimeout(() => {
+                                        if (isConnected) {
+                                            console.warn(`Frame timeout for ${streamId}`);
+                                            this.reconnectStream(streamId);
+                                        }
+                                    }, 10000);
+                                }
+                                
+                                // Update video
+                                const img = document.createElement('img');
+                                img.src = `data:image/jpeg;base64,${data.data}`;
+                                img.onerror = () => {
+                                    console.error(`Invalid frame data for ${streamId}`);
+                                };
+                                
+                                videoContainer.innerHTML = '';
+                                videoContainer.appendChild(img);
+                                
+                                // Update statistics
+                                this.updateStreamStats(streamId, data);
+                                
+                            } else if (data.type === 'camera_info') {
+                                console.log(`Camera info for ${streamId}:`, data.data);
+                            }
+                            
+                        } catch (error) {
+                            console.error(`Error parsing message for ${streamId}:`, error);
+                        }
+                    };
+
+                    ws.onerror = (error) => {
+                        console.error(`WebSocket error for ${streamId}:`, error);
+                        isConnected = false;
+                        if (frameTimeout) clearTimeout(frameTimeout);
+                    };
+
+                    ws.onclose = (event) => {
+                        console.log(`WebSocket closed for ${streamId}:`, event.code, event.reason);
+                        isConnected = false;
+                        if (frameTimeout) clearTimeout(frameTimeout);
+                        
+                        if (this.connections.has(streamId)) {
+                            // Unexpected disconnection - try to reconnect
+                            this.connections.delete(streamId);
+                            this.reconnectStream(streamId);
+                        }
+                    };
+
+                } catch (error) {
+                    console.error(`Failed to connect to ${streamId}:`, error);
+                    button.textContent = 'Connect';
+                    button.disabled = false;
+                    status.textContent = 'error';
+                    status.className = 'camera-status';
+                }
+            }
+
+            disconnectStream(streamId) {
+                const ws = this.connections.get(streamId);
+                if (ws) {
+                    ws.close();
+                    this.connections.delete(streamId);
+                }
+                
+                const button = document.getElementById(`btn-${streamId}`);
+                const status = document.getElementById(`status-${streamId}`);
+                const videoContainer = document.getElementById(`video-${streamId}`);
+                
+                button.textContent = 'Connect';
+                button.className = 'connect-btn';
+                button.disabled = false;
+                status.textContent = 'disconnected';
+                status.className = 'camera-status';
+                videoContainer.innerHTML = '<p>Disconnected</p>';
+            }
+
+            async reconnectStream(streamId) {
+                const attempts = this.reconnectAttempts.get(streamId) || 0;
+                
+                if (attempts >= this.maxReconnects) {
+                    console.log(`Max reconnection attempts reached for ${streamId}`);
+                    this.disconnectStream(streamId);
+                    return;
+                }
+                
+                this.reconnectAttempts.set(streamId, attempts + 1);
+                this.updateReconnectCount(streamId, attempts + 1);
+                
+                console.log(`Reconnecting ${streamId} (attempt ${attempts + 1})`);
+                
+                // Wait before reconnecting
+                await new Promise(resolve => setTimeout(resolve, this.reconnectDelay));
+                
+                // Only reconnect if not manually disconnected
+                if (!this.connections.has(streamId)) {
+                    await this.connectStream(streamId);
+                }
+            }
+
+            updateStreamStats(streamId, data) {
+                const currentTime = Date.now();
+                const lastTime = this.lastFrameTime.get(streamId) || currentTime;
+                const frameInterval = currentTime - lastTime;
+                
+                this.lastFrameTime.set(streamId, currentTime);
+                
+                // Update frame count
+                const frames = this.frameCount.get(streamId) + 1;
+                this.frameCount.set(streamId, frames);
+                
+                // Calculate FPS (rolling average)
+                const fps = frameInterval > 0 ? 1000 / frameInterval : 0;
+                
+                // Update connection quality based on frame size and interval
+                const frameSize = (data.data.length * 3 / 4) / 1024; // KB
+                let quality = 0;
+                
+                // IMPROVED quality calculation
+                if (fps > 8 && frameSize > 15 && frameSize < 50) quality = 100;
+                else if (fps > 5 && frameSize > 10 && frameSize < 60) quality = 75;
+                else if (fps > 3 && frameSize > 8 && frameSize < 80) quality = 50;
+                else quality = 25;
+                
+                this.connectionQuality.set(streamId, quality);
+                
+                // Update UI
+                document.getElementById(`fps-${streamId}`).textContent = fps.toFixed(1);
+                document.getElementById(`frames-${streamId}`).textContent = frames;
+                document.getElementById(`quality-text-${streamId}`).textContent = `${quality}% (${frameSize.toFixed(1)}KB)`;
+                
+                const qualityBar = document.getElementById(`quality-${streamId}`);
+                qualityBar.style.width = `${quality}%`;
+            }
+
+            updateReconnectCount(streamId, count) {
+                const element = document.getElementById(`reconnects-${streamId}`);
+                if (element) {
+                    element.textContent = count;
+                }
+            }
+
+            updateConnectionStatus(connected) {
+                const statusElement = document.getElementById('connectionStatus');
+                if (connected) {
+                    statusElement.textContent = 'Connected';
+                    statusElement.className = 'status-indicator status-connected';
+                } else {
+                    statusElement.textContent = 'Disconnected';
+                    statusElement.className = 'status-indicator status-disconnected';
+                }
+            }
+
+            updateSystemStatus() {
+                const totalCameras = this.cameras.size;
+                const connectedCameras = this.connections.size;
+                const totalFrames = Array.from(this.frameCount.values()).reduce((a, b) => a + b, 0);
+                const avgQuality = Array.from(this.connectionQuality.values()).reduce((a, b) => a + b, 0) / totalCameras || 0;
+                
+                const statusElement = document.getElementById('systemStatus');
+                statusElement.innerHTML = `
+                    <strong>System Status:</strong><br>
+                    📹 Cameras: ${connectedCameras}/${totalCameras} connected<br>
+                    🎬 Total frames received: ${totalFrames}<br>
+                    📶 Average connection quality: ${avgQuality.toFixed(0)}%<br>
+                    🕒 Last update: ${new Date().toLocaleTimeString()}
+                `;
+            }
+        }
+
+        // Global functions
+        function reconnectAll() {
+            if (window.streamManager) {
+                window.streamManager.connections.forEach((ws, streamId) => {
+                    window.streamManager.reconnectStream(streamId);
+                });
+            }
+        }
+
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            window.streamManager = new StableCameraStreams();
+        });
+    </script>
+</body>
+</html>

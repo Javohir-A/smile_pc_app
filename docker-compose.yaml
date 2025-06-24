@@ -1,0 +1,60 @@
+version: '3.8'
+
+services:
+  camera-app:
+    build: .
+    container_name: camera-streaming-app
+    restart: unless-stopped
+    
+    # Device access for cameras
+    # devices:
+    #   - /dev/video0:/dev/video0
+    #   - /dev/video1:/dev/video1
+    
+    # Privileged mode for camera access (if needed)
+    privileged: false
+    
+    # Network access for camera discovery
+    network_mode: host
+    
+    # Volume mounts
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      # Mount /tmp for shared memory (helps with Qt)
+      - /tmp/.X11-unix:/tmp/.X11-unix:ro
+    
+    # Environment variables to override any display/GPU settings
+    environment:
+      - PYTHONPATH=/app
+      - HOST_MAC=${HOST_MAC}
+      - PYTHONPATH=/app
+      - DISPLAY=:99
+      - QT_QPA_PLATFORM=offscreen
+      - QT_X11_NO_MITSHM=1
+      - QT_DEBUG_PLUGINS=0
+      - OPENCV_VIDEOIO_PRIORITY_MSMF=0
+      - CUDA_VISIBLE_DEVICES=""
+      - OPENCV_DNN_BACKEND=0
+      - MPLBACKEND=Agg
+      - LIBGL_ALWAYS_INDIRECT=1
+    
+    # Suppress unnecessary capabilities
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    
+    # Resource limits for mini PC
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
