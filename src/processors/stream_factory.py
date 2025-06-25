@@ -1,12 +1,13 @@
 # src/processors/stream_factory.py - UPDATED WITH VIDEO STORAGE
+import time
+from typing import Dict
+import logging
 from src.di.dependencies import DependencyContainer
 from src.usecases.face_usecase import FaceUseCase
 from src.processors.multi_stream_processor import MultiStreamProcessor
 from src.config.settings import AppConfig
-import logging
-from src.processors.face_detection_processor import FaceDetectionProcessor, DetectionResult, FrameData
-import time
-from typing import Dict
+from src.processors.face_detection_processor import FaceDetectionProcessor, DetectionResult
+from src.models.stream import FrameData
 from src.processors.emotion_processor import SimpleEmotionProcessor
 
 # logging.basicConfig(level=logging.ERROR)

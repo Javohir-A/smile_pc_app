@@ -17,7 +17,7 @@ tensorflow==2.19.0
 keras==3.10.0
 numpy==2.1.3
 pandas==2.3.0
-pillow==11.2.0
+# pillow==11.2.0
 
 # Database
 sqlalchemy==2.0.41
@@ -52,3 +52,4 @@ ucode-sdk==1.0.5
 
 # FFmpeg wrapper (for video processing)
 ffmpeg==1.4
+tf-keras==2.19.0

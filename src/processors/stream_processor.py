@@ -8,8 +8,11 @@ from typing import Dict, List, Optional, Callable, Any
 from dataclasses import dataclass
 from enum import Enum
 import numpy as np
+
 from src.config import AppConfig
 from src.api.fastapi_server import FastAPIWebSocketServer   
+from src.models.stream import FrameData
+
 # logging.getLogger("src.api.fastapi_server").setLevel(logging.DEBUG)
 # logging.getLogger("src.processors.stream_processor").setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -34,16 +37,6 @@ class StreamInfo:
     reconnect_count: int
     fps: float = 0.0
     resolution: tuple = (0, 0)
-
-@dataclass
-class FrameData:
-    """Frame data with metadata"""
-    stream_id: str
-    frame: np.ndarray
-    timestamp: float
-    frame_number: int
-    stream_info: StreamInfo
-    processed_frame: Optional[np.ndarray] = None  # For display with annotations
 
 @dataclass
 class DisplayFrame:

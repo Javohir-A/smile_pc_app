@@ -542,7 +542,7 @@ async def main():
     """Main application entry point"""
     try:
         # Parse command line arguments
-        env_version = "development"
+        env_version = "production"
         if len(sys.argv) > 1:
             versions = ["development", "production", "minipc-01", "minipc-02"]
             if sys.argv[1] not in versions:

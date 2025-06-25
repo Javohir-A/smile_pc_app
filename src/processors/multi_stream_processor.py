@@ -7,8 +7,9 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from src.config import AppConfig
 from src.di.dependencies import DependencyContainer
-from .stream_processor import StreamReader, StreamInfo, FrameData, StreamStatus, CentralizedDisplayManager
+from .stream_processor import StreamReader, StreamInfo, StreamStatus, CentralizedDisplayManager
 from src.helpers.system import get_system_mac_address
+from src.models.stream import FrameData
 
 logger = logging.getLogger(__name__)
 

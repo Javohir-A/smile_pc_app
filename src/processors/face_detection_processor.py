@@ -15,7 +15,7 @@ from ucode_sdk import new, Config
 
 from src.config import AppConfig
 from src.di.dependencies import DependencyContainer
-from src.models.stream import *
+from src.models.stream import FrameData
 
 logger = logging.getLogger(__name__)
 

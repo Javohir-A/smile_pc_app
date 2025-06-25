@@ -8,7 +8,7 @@ from collections import deque, defaultdict
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 from src.models.face_embedding import SearchResult
-from src.models.stream import *
+# from src.models.stream import FrameData
 from src.config import AppConfig
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # Reduce TF logging

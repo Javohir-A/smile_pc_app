@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from enum import Enum
 import numpy as np
+from typing import Optional
 
 class StreamStatus(Enum):
     IDLE = "idle"
@@ -32,3 +33,5 @@ class FrameData:
     timestamp: float
     frame_number: int
     stream_info: StreamInfo
+    processed_frame: Optional[np.ndarray] = None  # For display with annotations
+    
