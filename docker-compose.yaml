@@ -48,7 +48,8 @@ services:
       - FOWNER
       - SETGID
       - SETUID
-    
+    ports:
+      - "8765:8765"
     # Resource limits for mini PC
     deploy:
       resources:

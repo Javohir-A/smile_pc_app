@@ -148,3 +148,4 @@ cleanup\n\
 
 # Use the wrapper script as entrypoint
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
+EXPOSE 8765
