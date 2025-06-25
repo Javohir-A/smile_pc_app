@@ -1252,6 +1252,7 @@ class FaceDetectionProcessor:
                 return float(obj)
             else:
                 return str(obj)
+
 class UnknownPersonManager:
     """Manages unknown face detection and quality assessment"""
     
