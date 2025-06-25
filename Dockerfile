@@ -18,9 +18,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 # Install system dependencies required for OpenCV, face-recognition, and other packages
-# In your existing Dockerfile, update the Qt/GUI dependencies section:
-
-# Install system dependencies required for OpenCV, face-recognition, and other packages
 RUN apt-get update && apt-get install -y \
     # Build tools
     build-essential \
@@ -29,19 +26,32 @@ RUN apt-get update && apt-get install -y \
     # Network tools
     iproute2 \
     net-tools \
+    # CRITICAL: FFmpeg and codec libraries (install BEFORE OpenCV)
+    ffmpeg \
+    libavcodec-dev \
+    libavformat-dev \
+    libavutil-dev \
+    libswscale-dev \
+    libswresample-dev \
+    libavfilter-dev \
+    # H.264 codec support
+    libx264-dev \
+    libx265-dev \
+    # Additional video codecs
+    libxvidcore-dev \
+    libvpx-dev \
+    libtheora-dev \
+    libvorbis-dev \
+    libmp3lame-dev \
     # OpenCV dependencies
     libopencv-dev \
     libgtk-3-dev \
-    libavcodec-dev \
-    libavformat-dev \
-    libswscale-dev \
     libv4l-dev \
-    libxvidcore-dev \
-    libx264-dev \
     # Image processing libraries
     libjpeg-dev \
     libpng-dev \
     libtiff-dev \
+    libwebp-dev \
     # Math libraries
     libopenblas-dev \
     liblapack-dev \
@@ -76,7 +86,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Create directories for application structure
-RUN mkdir -p /app/src/app /app/logs /app/data
+RUN mkdir -p /app/src/app /app/logs /app/data /app/videos /app/temp_videos
 
 # Copy the entire application
 COPY . .
@@ -93,11 +103,10 @@ ENV PYTHONPATH="/app:${PYTHONPATH}"
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import sys; sys.exit(0)" || exit 1
 
-# Expose port if your app serves any web interface (uncomment if needed)
-# EXPOSE 8080
+# Expose ports for API and WebSocket
+EXPOSE 8765
 
-# Create wrapper script that sets up environment without modifying your code
-# Update the entrypoint script creation in your Dockerfile:
+# Create wrapper script that sets up environment
 RUN echo '#!/bin/bash\n\
 \n\
 echo "Setting up virtual display for GUI applications..."\n\
@@ -121,6 +130,10 @@ export QT_QPA_PLATFORM_PLUGIN_PATH=/usr/lib/x86_64-linux-gnu/qt5/plugins\n\
 export OPENCV_VIDEOIO_PRIORITY_MSMF=0\n\
 export CUDA_VISIBLE_DEVICES=""\n\
 export OPENCV_DNN_BACKEND=0\n\
+\n\
+# Verify FFmpeg installation\n\
+echo "FFmpeg version:"\n\
+ffmpeg -version | head -n 1\n\
 \n\
 echo "Display setup complete. Starting application..."\n\
 \n\
@@ -148,4 +161,3 @@ cleanup\n\
 
 # Use the wrapper script as entrypoint
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
-EXPOSE 8765

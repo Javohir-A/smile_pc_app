@@ -14,13 +14,19 @@ services:
     # Privileged mode for camera access (if needed)
     privileged: false
     
-    # Network access for camera discovery
+    # Network access for camera discovery and API exposure
     network_mode: host
+    
+    # Expose ports for API and WebSocket access
+    ports:
+      - "8765:8765"  # FastAPI WebSocket server
     
     # Volume mounts
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data
+      - ./videos:/app/videos          # Mount video output directory
+      - ./temp_videos:/app/temp_videos # Mount temp video directory  
       # Mount /tmp for shared memory (helps with Qt)
       - /tmp/.X11-unix:/tmp/.X11-unix:ro
     
@@ -28,7 +34,7 @@ services:
     environment:
       - PYTHONPATH=/app
       - HOST_MAC=${HOST_MAC}
-      - PYTHONPATH=/app
+      # Remove duplicate PYTHONPATH
       - DISPLAY=:99
       - QT_QPA_PLATFORM=offscreen
       - QT_X11_NO_MITSHM=1
@@ -38,6 +44,17 @@ services:
       - OPENCV_DNN_BACKEND=0
       - MPLBACKEND=Agg
       - LIBGL_ALWAYS_INDIRECT=1
+      # WebSocket/API settings
+      - ENABLE_WEBSOCKET=true
+      - WEBSOCKET_PORT=8765
+      - WEBSOCKET_QUALITY=100
+      - WEBSOCKET_MAX_FPS=30
+      # Video generation settings
+      - VIDEO_GENERATION_ENABLED=true
+      - VIDEO_TRIGGER_EMOTIONS=upset,smile,normal
+      - FFMPEG_ENABLED=true
+      # OpenCV codec settings
+      - OPENCV_FFMPEG_CAPTURE_OPTIONS="protocol_whitelist;file,rtp,udp"
     
     # Suppress unnecessary capabilities
     cap_drop:
@@ -48,8 +65,7 @@ services:
       - FOWNER
       - SETGID
       - SETUID
-    ports:
-      - "8765:8765"
+    
     # Resource limits for mini PC
     deploy:
       resources:

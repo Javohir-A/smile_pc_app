@@ -73,11 +73,25 @@ class AsyncVideoStorageProcessor:
     def _check_ffmpeg(self) -> bool:
         """Check if ffmpeg is available for video processing"""
         try:
-            subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
-            return True
+            # Check FFmpeg availability
+            result = subprocess.run(['ffmpeg', '-version'], 
+                                capture_output=True, check=True, text=True)
+            logger.info(f"FFmpeg detected: {result.stdout.split()[2]}")
+            
+            # Check for H.264 encoder specifically
+            codecs_result = subprocess.run(['ffmpeg', '-encoders'], 
+                                        capture_output=True, text=True)
+            if 'libx264' in codecs_result.stdout:
+                logger.info("✅ H.264 encoder (libx264) available")
+                return True
+            else:
+                logger.warning("⚠️ H.264 encoder not available, falling back to OpenCV")
+                return False
+                
         except (subprocess.CalledProcessError, FileNotFoundError):
             logger.warning("FFmpeg not found - using OpenCV only (may have browser compatibility issues)")
             return False
+
     
     def _start_background_workers(self):
         """Start background workers for video processing"""
@@ -288,9 +302,9 @@ class AsyncVideoStorageProcessor:
             return self._create_video_with_ffmpeg_async(session, end_time, filename)
         else:
             return self._create_video_with_opencv_async(session, end_time, filename)
-    
+
     def _create_video_with_ffmpeg_async(self, session: PersonVideoSession, end_time: datetime, filename: str) -> Optional[VideoRecord]:
-        """Create video using FFmpeg in background - NON-BLOCKING"""
+        """Enhanced FFmpeg video creation with better error handling"""
         
         temp_file = os.path.join(self.temp_dir, f"temp_{filename}")
         final_file = os.path.join(self.video_dir, filename)
@@ -299,9 +313,9 @@ class AsyncVideoStorageProcessor:
         first_frame = session.frames[0]['frame']
         height, width = first_frame.shape[:2]
         
-        # Create temporary raw video with OpenCV first
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        fps = 30.0
+        # Create temporary raw video with OpenCV using most compatible codec
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # Use mp4v for temp file
+        fps = 15.0  # Reduced FPS for better compatibility
         
         temp_writer = cv2.VideoWriter(temp_file, fourcc, fps, (width, height))
         
@@ -310,7 +324,7 @@ class AsyncVideoStorageProcessor:
             return None
         
         try:
-            # Write frames to temporary file (fast operation)
+            # Write frames to temporary file
             frames_written = 0
             for frame_data in session.frames:
                 temp_writer.write(frame_data['frame'])
@@ -318,37 +332,67 @@ class AsyncVideoStorageProcessor:
             
             temp_writer.release()
             
-            # Convert to web-compatible format using FFmpeg (ASYNC)
+            # Verify temp file was created
+            if not os.path.exists(temp_file) or os.path.getsize(temp_file) == 0:
+                logger.error(f"Temporary video file creation failed: {temp_file}")
+                return None
+            
+            # Enhanced FFmpeg command with fallback options
             ffmpeg_cmd = [
                 'ffmpeg',
                 '-i', temp_file,
-                '-c:v', 'libx264',           # H.264 codec for maximum compatibility
-                '-preset', 'ultrafast',      # Fastest encoding for real-time processing
-                '-crf', '28',                # Slightly lower quality for speed
-                '-profile:v', 'baseline',    # H.264 baseline profile for maximum compatibility
-                '-level', '3.0',             # H.264 level for web compatibility
-                '-pix_fmt', 'yuv420p',       # Pixel format compatible with all browsers
-                '-movflags', '+faststart',   # Enable progressive download
+                '-c:v', 'libx264',           # Try H.264 first
+                '-preset', 'ultrafast',      # Fastest encoding
+                '-crf', '28',                # Reasonable quality
+                '-profile:v', 'baseline',    # Maximum compatibility
+                '-level', '3.0',             # Web compatibility
+                '-pix_fmt', 'yuv420p',       # Universal pixel format
+                '-movflags', '+faststart',   # Progressive download
                 '-r', str(fps),              # Frame rate
+                '-avoid_negative_ts', 'make_zero',  # Fix timestamp issues
+                '-fflags', '+genpts',        # Generate presentation timestamps
                 '-y',                        # Overwrite output file
                 final_file
             ]
             
-            # Run FFmpeg asynchronously without blocking
-            logger.debug(f"🔧 Converting video with FFmpeg (background): {filename}")
-            result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
+            # Run FFmpeg with enhanced error handling
+            logger.debug(f"🔧 Converting video with FFmpeg: {filename}")
+            result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True, timeout=60)
             
             if result.returncode != 0:
-                logger.error(f"FFmpeg conversion failed: {result.stderr}")
-                return None
+                logger.warning(f"FFmpeg H.264 encoding failed, trying fallback: {result.stderr}")
+                
+                # Fallback: Try with different codec
+                fallback_cmd = [
+                    'ffmpeg',
+                    '-i', temp_file,
+                    '-c:v', 'mpeg4',            # Fallback to MPEG-4
+                    '-preset', 'ultrafast',
+                    '-qscale:v', '3',           # Good quality
+                    '-r', str(fps),
+                    '-y',
+                    final_file
+                ]
+                
+                result = subprocess.run(fallback_cmd, capture_output=True, text=True, timeout=60)
+                
+                if result.returncode != 0:
+                    logger.error(f"FFmpeg fallback also failed: {result.stderr}")
+                    return None
             
             # Clean up temporary file
             if os.path.exists(temp_file):
                 os.remove(temp_file)
             
             # Verify final file
-            if not os.path.exists(final_file) or os.path.getsize(final_file) == 0:
-                logger.error(f"FFmpeg output file creation failed: {final_file}")
+            if not os.path.exists(final_file):
+                logger.error(f"FFmpeg output file not created: {final_file}")
+                return None
+                
+            file_size = os.path.getsize(final_file)
+            if file_size == 0:
+                logger.error(f"FFmpeg output file is empty: {final_file}")
+                os.remove(final_file)
                 return None
             
             duration = (end_time - session.start_time).total_seconds()
@@ -366,19 +410,22 @@ class AsyncVideoStorageProcessor:
                 created_at=datetime.now()
             )
             
-            logger.info(f"✅ Created web-compatible video: {filename} ({duration:.1f}s, {frames_written} frames)")
+            logger.info(f"✅ Created video with FFmpeg: {filename} ({duration:.1f}s, {frames_written} frames, {file_size} bytes)")
             return video_record
             
+        except subprocess.TimeoutExpired:
+            logger.error(f"FFmpeg encoding timeout for {filename}")
+            return None
         except Exception as e:
-            logger.error(f"Error in async FFmpeg video creation: {e}")
+            logger.error(f"Error in FFmpeg video creation: {e}")
             # Clean up temporary files
             for temp_path in [temp_file, final_file]:
                 if os.path.exists(temp_path):
                     os.remove(temp_path)
             return None
-    
+
     def _create_video_with_opencv_async(self, session: PersonVideoSession, end_time: datetime, filename: str) -> Optional[VideoRecord]:
-        """Fallback: Create video using OpenCV in background"""
+        """Improved OpenCV video creation with better codec handling"""
         
         file_path = os.path.join(self.video_dir, filename)
         
@@ -386,41 +433,78 @@ class AsyncVideoStorageProcessor:
         first_frame = session.frames[0]['frame']
         height, width = first_frame.shape[:2]
         
-        # Use H.264 codec with OpenCV
+        # Enhanced codec priority list for better compatibility
         codecs_to_try = [
-            ('avc1', cv2.VideoWriter_fourcc(*'avc1')),  # H.264
-            ('H264', cv2.VideoWriter_fourcc(*'H264')),  # H.264 alternative
+            # Try basic MP4 codecs first (most compatible)
             ('mp4v', cv2.VideoWriter_fourcc(*'mp4v')),  # MPEG-4
+            ('XVID', cv2.VideoWriter_fourcc(*'XVID')),  # Xvid
+            # Try H.264 variants (if available)
+            ('avc1', cv2.VideoWriter_fourcc(*'avc1')),  # H.264 variant 1
+            ('H264', cv2.VideoWriter_fourcc(*'H264')),  # H.264 variant 2
+            ('X264', cv2.VideoWriter_fourcc(*'X264')),  # x264
+            # Fallback to basic codecs
+            ('MJPG', cv2.VideoWriter_fourcc(*'MJPG')),  # Motion JPEG
         ]
         
-        fps = 30.0
+        fps = 15.0  # Reduced FPS for better compatibility
         out = None
+        successful_codec = None
         
         for codec_name, fourcc in codecs_to_try:
-            out = cv2.VideoWriter(file_path, fourcc, fps, (width, height))
-            if out.isOpened():
-                logger.debug(f"Using codec: {codec_name}")
-                break
-            else:
-                out.release()
+            try:
+                out = cv2.VideoWriter(file_path, fourcc, fps, (width, height))
+                if out.isOpened():
+                    # Test write a frame to ensure codec actually works
+                    test_frame = first_frame.copy()
+                    out.write(test_frame)
+                    successful_codec = codec_name
+                    logger.info(f"✅ Using codec: {codec_name}")
+                    break
+                else:
+                    if out:
+                        out.release()
+                    out = None
+            except Exception as e:
+                logger.debug(f"Codec {codec_name} failed: {e}")
+                if out:
+                    out.release()
                 out = None
         
-        if not out:
-            logger.error(f"Failed to create video writer with any codec")
+        if not out or not successful_codec:
+            logger.error("❌ Failed to create video writer with any codec")
             return None
         
         try:
+            # Reset video writer for actual recording
+            out.release()
+            fourcc = cv2.VideoWriter_fourcc(*successful_codec)
+            out = cv2.VideoWriter(file_path, fourcc, fps, (width, height))
+            
+            if not out.isOpened():
+                logger.error(f"Failed to reinitialize video writer with {successful_codec}")
+                return None
+            
             # Write all frames
             frames_written = 0
             for frame_data in session.frames:
-                out.write(frame_data['frame'])
-                frames_written += 1
+                try:
+                    out.write(frame_data['frame'])
+                    frames_written += 1
+                except Exception as e:
+                    logger.warning(f"Failed to write frame {frames_written}: {e}")
+                    continue
             
             out.release()
             
-            # Verify file was created
-            if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
-                logger.error(f"OpenCV video file creation failed: {file_path}")
+            # Verify file was created and has content
+            if not os.path.exists(file_path):
+                logger.error(f"Video file was not created: {file_path}")
+                return None
+                
+            file_size = os.path.getsize(file_path)
+            if file_size == 0:
+                logger.error(f"Video file is empty: {file_path}")
+                os.remove(file_path)
                 return None
             
             duration = (end_time - session.start_time).total_seconds()
@@ -438,7 +522,7 @@ class AsyncVideoStorageProcessor:
                 created_at=datetime.now()
             )
             
-            logger.info(f"⚠️ Created video with OpenCV (background): {filename}")
+            logger.info(f"✅ Created video with OpenCV: {filename} ({successful_codec}, {duration:.1f}s, {frames_written} frames, {file_size} bytes)")
             return video_record
             
         except Exception as e:
@@ -449,7 +533,7 @@ class AsyncVideoStorageProcessor:
             if os.path.exists(file_path):
                 os.remove(file_path)
             return None
-    
+        
     def _check_session_timeouts(self, current_time: datetime, camera_id: str, current_people: set = None):
         """Check for session timeouts and queue videos for processing"""
         if current_people is None:
