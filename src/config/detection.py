@@ -15,7 +15,7 @@ class DetectionConfig(BaseConfig):
     detection_size: Tuple[int, int] = (416, 416)
     detection_interval: int = 3
     distance_threshold: float = 0.6
-    confidence_threshold: float = 0.5
+    confidence_threshold: float = 0.3
     
     # Emotion settings
     emotion_map: Dict[str, str] = field(default_factory=dict)

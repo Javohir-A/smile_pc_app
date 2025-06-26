@@ -1,1 +1,16 @@
 /smile_pc_venv
+/storage
+/temp_videos
+
+__pycache__/
+*.pyc
+*.pyo
+*.log
+*.mp4
+*.avi
+*.jpg
+*.png
+venv/
+.env
+videos/
+logs/

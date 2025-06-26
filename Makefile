@@ -1,21 +1,17 @@
-CURRENT_DIR=$(shell pwd)
+CURRENT_DIR := $(shell pwd)
+APP_NAME := $(shell basename $(CURRENT_DIR))
 
-APP=$(shell basename ${CURRENT_DIR})
+REGISTRY := javohirgo
+IMAGE_NAME := smile-mini-pc-app
+TAG := latest
 
-REGISTRY=gitlab.udevs.io:5050
-TAG=latest
-ENV_TAG=latest
-PROJECT_NAME=smile-mini-pc-app
-DOCKERFILE=Dockerfile
+DOCKERFILE := Dockerfile
 
 build-image:
-	docker build --rm -t ${REGISTRY}/${PROJECT_NAME}/${APP}:${TAG} . -f ${DOCKERFILE}
-	docker tag ${REGISTRY}/${PROJECT_NAME}/${APP}:${TAG} ${REGISTRY}/${PROJECT_NAME}/${APP}:${ENV_TAG}
+	docker build --rm -f $(DOCKERFILE) -t $(REGISTRY)/$(IMAGE_NAME):$(TAG) .
 
 push-image:
-	docker push ${REGISTRY}/${PROJECT_NAME}/${APP}:${TAG}
-	docker push ${REGISTRY}/${PROJECT_NAME}/${APP}:${ENV_TAG}
+	docker push $(REGISTRY)/$(IMAGE_NAME):$(TAG)
 
 clear-image:
-	docker rmi ${REGISTRY}/${PROJECT_NAME}/${APP}:${TAG}
-	docker rmi ${REGISTRY}/${PROJECT_NAME}/${APP}:${ENV_TAG}
+	docker rmi $(REGISTRY)/$(IMAGE_NAME):$(TAG)

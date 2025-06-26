@@ -2,61 +2,46 @@ version: '3.8'
 
 services:
   camera-app:
-    build: .
+    image: javohirgo/smile-mini-pc-app:latest  # Use image, not build path here
     container_name: camera-streaming-app
     restart: unless-stopped
-    
-    # Device access for cameras
+
+    # Uncomment if you're accessing physical cameras
     # devices:
     #   - /dev/video0:/dev/video0
     #   - /dev/video1:/dev/video1
-    
-    # Privileged mode for camera access (if needed)
+
     privileged: false
-    
-    # Network access for camera discovery and API exposure
-    network_mode: host
-    
-    # Expose ports for API and WebSocket access
+    network_mode: host  # Required for RTSP, discovery, WebSocket performance
+
     ports:
-      - "8765:8765"  # FastAPI WebSocket server
-    
-    # Volume mounts
+      - "8765:8765"
+
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data
-      - ./videos:/app/videos          # Mount video output directory
-      - ./temp_videos:/app/temp_videos # Mount temp video directory  
-      # Mount /tmp for shared memory (helps with Qt)
-      - /tmp/.X11-unix:/tmp/.X11-unix:ro
-    
-    # Environment variables to override any display/GPU settings
+      - ./videos:/app/videos
+      - ./temp_videos:/app/temp_videos
+
     environment:
       - PYTHONPATH=/app
       - HOST_MAC=${HOST_MAC}
-      # Remove duplicate PYTHONPATH
-      - DISPLAY=:99
-      - QT_QPA_PLATFORM=offscreen
-      - QT_X11_NO_MITSHM=1
-      - QT_DEBUG_PLUGINS=0
       - OPENCV_VIDEOIO_PRIORITY_MSMF=0
       - CUDA_VISIBLE_DEVICES=""
       - OPENCV_DNN_BACKEND=0
       - MPLBACKEND=Agg
       - LIBGL_ALWAYS_INDIRECT=1
-      # WebSocket/API settings
+
+      # Application-specific
       - ENABLE_WEBSOCKET=true
       - WEBSOCKET_PORT=8765
       - WEBSOCKET_QUALITY=100
       - WEBSOCKET_MAX_FPS=30
-      # Video generation settings
       - VIDEO_GENERATION_ENABLED=true
       - VIDEO_TRIGGER_EMOTIONS=upset,smile,normal
       - FFMPEG_ENABLED=true
-      # OpenCV codec settings
-      - OPENCV_FFMPEG_CAPTURE_OPTIONS="protocol_whitelist;file,rtp,udp"
-    
-    # Suppress unnecessary capabilities
+      - OPENCV_FFMPEG_CAPTURE_OPTIONS=protocol_whitelist;file,rtp,udp
+
     cap_drop:
       - ALL
     cap_add:
@@ -65,8 +50,7 @@ services:
       - FOWNER
       - SETGID
       - SETUID
-    
-    # Resource limits for mini PC
+
     deploy:
       resources:
         limits:

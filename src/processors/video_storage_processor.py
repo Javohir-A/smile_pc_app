@@ -318,7 +318,7 @@ class AsyncVideoStorageProcessor:
         fps = 15.0  # Reduced FPS for better compatibility
         
         temp_writer = cv2.VideoWriter(temp_file, fourcc, fps, (width, height))
-        
+         
         if not temp_writer.isOpened():
             logger.error(f"Failed to create temporary video writer")
             return None
